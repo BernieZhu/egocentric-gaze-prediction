@@ -9,7 +9,8 @@ from scipy import ndimage
 parser = argparse.ArgumentParser()
 parser.add_argument('--trained_model', default='models/spatial.pth.tar', required=False,)
 parser.add_argument('--trained_late', default='models/late.pth.tar', required=False,)
-parser.add_argument('--dir', required=True)
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
 parser.add_argument('--device', default='0', help='now only support single GPU')
 args = parser.parse_args()
 device = torch.device('cuda:'+args.device) if torch.cuda.is_available else 'cpu'
@@ -89,7 +90,7 @@ def crop_feature1(feature, maxind, size):
     fmax = np.array(maxind)
     fmax = fmax // 16  #downsize from 224 to 14
     fmax = np.clip(fmax, size//2, H-int(math.ceil(size/2.0)))
-    print(fmax)
+    #print(fmax)
     cfeature = feature[:,:,int(fmax[0]-size//2):int(fmax[0]+int(math.ceil(size/2.0))),int(fmax[1]-size//2):int(fmax[1]+int(math.ceil(size/2.0)))]
     return cfeature
 
@@ -118,28 +119,34 @@ def toim(ten):
     #ten = ten.transpose((2,0,1))
     return ten
 
-ims = os.listdir(args.dir)
-ims = [k for k in ims if 'img' in k]
-for imname in ims:
-    im = cv2.imread(os.path.join(args.dir, imname))
-    im = cv2.resize(im, (224,224))
-    im = totensor(im)
-    im = im.to(device)
-    with torch.no_grad():
-        out, feat = model(im)
-    im = toim(out)
-    predicted = ndimage.measurements.center_of_mass(im)
-    vec = crop_feature1(feat, predicted,3)
-    vec = vec.contiguous().view(vec.size(0), vec.size(1), -1)
-    vec = torch.mean(vec, 2).squeeze()
-    weighted = get_weighted(vec, feat)
-    weighted = torch.nn.functional.upsample(weighted, scale_factor=16, mode='bilinear')
-    with torch.no_grad():
-        fin = lf(out, weighted)
-    fin = toim(fin)
+dirs = os.listdir(args.input)
+for dir in dirs:
+    outdir = os.path.join(args.output, dir)
+    if( not os.path.exists(outdir)):
+        os.makedirs(outdir) 
+    dir = os.path.join(args.input, dir)
+    ims = os.listdir(dir)
+    ims = [k for k in ims if '.jpg' in k]
+    for imname in ims:
+        im = cv2.imread(os.path.join(dir, imname))
+        im = cv2.resize(im, (224,224))
+        im = totensor(im)
+        im = im.to(device)
+        with torch.no_grad():
+            out, feat = model(im)
+        im = toim(out)
+        predicted = ndimage.measurements.center_of_mass(im)
+        vec = crop_feature1(feat, predicted,3)
+        vec = vec.contiguous().view(vec.size(0), vec.size(1), -1)
+        vec = torch.mean(vec, 2).squeeze()
+        weighted = get_weighted(vec, feat)
+        weighted = torch.nn.functional.upsample(weighted, scale_factor=16, mode='bilinear')
+        with torch.no_grad():
+            fin = lf(out, weighted) # attention, torch.Size([1, 1, 224, 224])
+        fin = toim(fin)
 
-    im = cv2.imread(os.path.join(args.dir, imname))
-    colormap = cv2.applyColorMap(cv2.resize(fin, (im.shape[1], im.shape[0])), cv2.COLORMAP_JET)
-    res = im * 0.7 + colormap * 0.3
-    cv2.imwrite(os.path.join(args.dir, 'out_'+imname[3:]), res)
-    print('result saved to '+ os.path.join(args.dir, 'out_'+imname[3:]))
+        im = cv2.imread(os.path.join(dir, imname))
+        colormap = cv2.resize(fin, (im.shape[1], im.shape[0]))
+        res = colormap
+        cv2.imwrite(os.path.join(outdir, imname), res)
+        print('result saved to '+ os.path.join(outdir, imname))
